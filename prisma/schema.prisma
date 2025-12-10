@@ -1,0 +1,281 @@
+// NusantaraRadius RADIUS Billing System Database Schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// RADIUS Users Table
+model RadiusUser {
+  id          String   @id @default(cuid())
+  username    String   @unique
+  password    String   // Hashed password
+  email       String   @unique
+  phone       String?
+  fullName    String?
+  address     String?
+  status      UserStatus @default(ACTIVE)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // RADIUS specific fields
+  serviceType String?  @default("Framed-User")
+  framedProtocol String? @default("PPP")
+  framedIPAddress String?
+  framedNetmask   String?
+  framedMTU       Int?    @default(1500)
+  
+  // Relations
+  subscriptions Subscription[]
+  transactions  Transaction[]
+  vouchers      Voucher[]
+  accessLogs    AccessLog[]
+  
+  @@map("radius_users")
+}
+
+// Subscription Packages
+model Package {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  price       Int      // in Rupiah
+  duration    Int      // in days
+  speed       String   // e.g., "10Mbps", "50Mbps"
+  dataLimit   BigInt?  // in bytes, null for unlimited
+  timeLimit   Int?     // in minutes per day, null for unlimited
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  subscriptions Subscription[]
+  transactions  Transaction[]
+  
+  @@map("packages")
+}
+
+// User Subscriptions
+model Subscription {
+  id           String           @id @default(cuid())
+  userId       String
+  packageId    String
+  startDate    DateTime         @default(now())
+  endDate      DateTime
+  status       SubscriptionStatus @default(ACTIVE)
+  autoRenew    Boolean          @default(false)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  
+  // Usage tracking
+  dataUsed     BigInt           @default(0)  // in bytes
+  timeUsed     Int              @default(0)  // in minutes
+  
+  // Relations
+  user         RadiusUser       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  package      Package          @relation(fields: [packageId], references: [id])
+  transactions Transaction[]
+  
+  @@map("subscriptions")
+}
+
+// Payment Transactions
+model Transaction {
+  id            String            @id @default(cuid())
+  userId        String
+  packageId     String?
+  subscriptionId String?
+  amount        Int               // in Rupiah
+  type          TransactionType
+  status        TransactionStatus @default(PENDING)
+  paymentMethod PaymentMethod
+  paymentRef    String?           // payment gateway reference
+  description   String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  
+  // Relations
+  user          RadiusUser        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  package       Package?          @relation(fields: [packageId], references: [id])
+  subscription  Subscription?     @relation(fields: [subscriptionId], references: [id])
+  
+  @@map("transactions")
+}
+
+// Voucher System
+model Voucher {
+  id          String      @id @default(cuid())
+  code        String      @unique
+  packageId   String?
+  value       Int?        // voucher value in Rupiah
+  duration    Int?        // additional duration in days
+  maxUses     Int         @default(1)
+  usedCount   Int         @default(0)
+  isActive    Boolean     @default(true)
+  expiresAt   DateTime?
+  createdBy   String?     // admin user ID
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  
+  // Relations
+  userId      String?
+  user        RadiusUser?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  redemptions VoucherRedemption[]
+  
+  @@map("vouchers")
+}
+
+model VoucherRedemption {
+  id         String   @id @default(cuid())
+  voucherId  String
+  userId     String
+  redeemedAt DateTime @default(now())
+  
+  voucher    Voucher   @relation(fields: [voucherId], references: [id], onDelete: Cascade)
+  
+  @@map("voucher_redemptions")
+}
+
+// RADIUS Access Logs
+model AccessLog {
+  id          String      @id @default(cuid())
+  userId      String
+  nasId       String?     // Network Access Server ID
+  nasIp       String?     // NAS IP Address
+  sessionId   String?     // RADIUS Session ID
+  action      LogAction   // START, STOP, INTERIM-UPDATE
+  timestamp   DateTime    @default(now())
+  ipAddress   String?
+  macAddress  String?
+  uploadBytes BigInt      @default(0)
+  downloadBytes BigInt    @default(0)
+  sessionTime Int         @default(0) // in seconds
+  terminateCause String?   // Session termination reason
+  
+  // Relations
+  user        RadiusUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@map("access_logs")
+}
+
+// System Configuration
+model SystemConfig {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String
+  description String?
+  category    String   @default("general")
+  updatedAt   DateTime @updatedAt
+  
+  @@map("system_config")
+}
+
+// Notification Templates
+model NotificationTemplate {
+  id          String           @id @default(cuid())
+  name        String           @unique
+  type        NotificationType
+  subject     String?
+  content     String
+  variables   String?          // JSON string of template variables
+  isActive    Boolean          @default(true)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  
+  @@map("notification_templates")
+}
+
+// Notification Queue
+model NotificationQueue {
+  id          String           @id @default(cuid())
+  userId      String?
+  recipient   String           // email, phone number, etc.
+  type        NotificationType
+  channel     NotificationChannel
+  subject     String?
+  content     String
+  status      NotificationStatus @default(PENDING)
+  attempts    Int              @default(0)
+  maxAttempts Int              @default(3)
+  sentAt      DateTime?
+  error       String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  
+  @@map("notification_queue")
+}
+
+// Enums
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  EXPIRED
+  BLOCKED
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  SUSPENDED
+  CANCELLED
+}
+
+enum TransactionType {
+  SUBSCRIPTION
+  RENEWAL
+  UPGRADE
+  TOPUP
+  REFUND
+}
+
+enum TransactionStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  TRANSFER
+  EWALLET
+  CREDIT_CARD
+  DEBIT_CARD
+  CASH
+}
+
+enum LogAction {
+  START
+  STOP
+  INTERIM_UPDATE
+}
+
+enum NotificationType {
+  WELCOME
+  PAYMENT_SUCCESS
+  PAYMENT_FAILED
+  SUBSCRIPTION_EXPIRING
+  SUBSCRIPTION_EXPIRED
+  SERVICE_SUSPENDED
+  SERVICE_REACTIVATED
+  MAINTENANCE
+  PROMOTION
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  WHATSAPP
+  TELEGRAM
+  PUSH_NOTIFICATION
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  CANCELLED
+}
